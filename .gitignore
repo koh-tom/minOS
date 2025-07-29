@@ -12,6 +12,7 @@ node_modules/
 secerts
 *.pem
 *.key
-.cz-config.cjs
+.cz-config.js
 commitlint.config.js
 .vscode/
+.clang-format
