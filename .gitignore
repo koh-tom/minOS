@@ -1,0 +1,17 @@
+/disk/*
+!/disk/.gitkeep
+*.map
+*.tar
+*.o
+*.elf
+*.bin
+*.log
+*.pcap
+node_modules/
+.husky/
+secerts
+*.pem
+*.key
+.cz-config.cjs
+commitlint.config.js
+.vscode/
