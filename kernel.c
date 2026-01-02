@@ -1,10 +1,18 @@
 #include "kernel.h"
 #include "common.h"
 
+// 外部シンボル
 extern char __bss[], __bss_end[], __stack_top[];
 extern char __free_ram[], __free_ram_end[];
 
+// プロセス管理
+struct process procs[PROCS_MAX];
+struct process *proc_a;
+struct process *proc_b;
+
+// メモリ管理
 paddr_t alloc_pages(uint32_t n) {
+
   static paddr_t next_paddr = (paddr_t)__free_ram;
   paddr_t paddr = next_paddr;
   next_paddr += n * PAGE_SIZE;
@@ -16,6 +24,7 @@ paddr_t alloc_pages(uint32_t n) {
   return paddr;
 }
 
+// OpenSBI呼び出し
 struct sbiret sbi_call(long arg0, long arg1, long arg2, long arg3, long arg4,
                        long arg5, long fid, long eid) {
   register long a0 __asm__("a0") = arg0;
@@ -35,8 +44,20 @@ struct sbiret sbi_call(long arg0, long arg1, long arg2, long arg3, long arg4,
   return (struct sbiret){.error = a0, .value = a1};
 }
 
+// 1文字出力用関数
 void putchar(char ch) { sbi_call(ch, 0, 0, 0, 0, 0, 0, 1); }
 
+// トラップハンドラ
+void handle_trap(struct trap_frame *f) {
+  uint32_t scause = READ_CSR(scause);
+  uint32_t stval = READ_CSR(stval);
+  uint32_t user_pc = READ_CSR(sepc);
+
+  PANIC("unexpected trap scause=%x, stval=%x, sepc=%x\n", scause, stval,
+        user_pc);
+}
+
+// 例外発生時のエントリー
 __attribute__((naked)) __attribute__((aligned(4))) void kernel_entry(void) {
   __asm__ __volatile__("csrw sscratch, sp\n"
                        "addi sp, sp, -4 * 31\n"
@@ -111,17 +132,7 @@ __attribute__((naked)) __attribute__((aligned(4))) void kernel_entry(void) {
                        "sret\n");
 }
 
-void handle_trap(struct trap_frame *f) {
-  uint32_t scause = READ_CSR(scause);
-  uint32_t stval = READ_CSR(stval);
-  uint32_t user_pc = READ_CSR(sepc);
-
-  PANIC("unexpected trap scause=%x, stval=%x, sepc=%x\n", scause, stval,
-        user_pc);
-}
-
-struct process procs[PROCS_MAX];
-
+// コンテキストスイッチ
 __attribute__((naked)) void switch_context(uint32_t *prev_sp,
                                            uint32_t *next_sp) {
   __asm__ __volatile__("addi sp, sp, -13 * 4\n"
@@ -159,6 +170,7 @@ __attribute__((naked)) void switch_context(uint32_t *prev_sp,
                        "ret\n");
 }
 
+// プロセス生成
 struct process *create_process(uint32_t pc) {
   struct process *proc = NULL;
   int i;
@@ -194,15 +206,14 @@ struct process *create_process(uint32_t pc) {
   return proc;
 }
 
+// ディレイ関数
 void delay(void) {
   for (int i = 0; i < 30000000; i++) {
     __asm__ __volatile__("nop");
   }
 }
 
-struct process *proc_a;
-struct process *proc_b;
-
+// プロセスAのエントリ
 void proc_a_entry(void) {
   printf("start process_a\n");
   while (1) {
@@ -212,6 +223,7 @@ void proc_a_entry(void) {
   }
 }
 
+// プロセスBのエントリ
 void proc_b_entry(void) {
   printf("start process_b\n");
   while (1) {
@@ -221,37 +233,49 @@ void proc_b_entry(void) {
   }
 }
 
+// カーネルメイン
 void kernel_main(void) {
+  // BSS領域をゼロ初期化
   memset(__bss, 0, (size_t)__bss_end - (size_t)__bss);
+
+  // Hello World!テスト
   const char *s = "\n\nHello World!\n";
   for (int i = 0; s[i] != '\0'; i++) {
     putchar(s[i]);
   }
 
+  // printfテスト
   printf("\n\nHello %s (printf)\n", "World!");
   printf("1 + 2 = %d, %x\n", 1 + 2, 0x1234abcd);
 
+  // メモリ割当テスト
   paddr_t paddr0 = alloc_pages(2);
   paddr_t paddr1 = alloc_pages(1);
   printf("alloc_pages test: paddr0=%x\n", paddr0);
   printf("alloc_pages test: paddr1=%x\n", paddr1);
 
+  // 例外処理テスト
   WRITE_CSR(stvec, (uint32_t)kernel_entry);
 
+  // プロセス生成と起動
   proc_a = create_process((uint32_t)proc_a_entry);
   proc_b = create_process((uint32_t)proc_b_entry);
   proc_a_entry();
 
+  // 未定義例外を発生させる(到達しない)
   __asm__ __volatile__("unimp");
 
+  // ここにも到達しない
   PANIC("booted!");
   printf("unreachable here!\n");
 
+  // ここにも到達しない
   while (1) {
     __asm__ __volatile__("wfi");
   }
 }
 
+// ブートコード
 __attribute__((section(".text.boot"))) __attribute__((naked)) void boot(void) {
   __asm__ __volatile__("mv sp, %[stack_top]\n"
                        "j kernel_main\n"
