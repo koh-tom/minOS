@@ -10,6 +10,10 @@ struct process procs[PROCS_MAX];
 struct process *proc_a;
 struct process *proc_b;
 
+// スケジューラ用
+struct process *current_proc;
+struct process *idle_proc;
+
 // メモリ管理
 paddr_t alloc_pages(uint32_t n) {
 
@@ -206,6 +210,25 @@ struct process *create_process(uint32_t pc) {
   return proc;
 }
 
+// スケジューラ
+void yield(void) {
+  struct process *next = idle_proc;
+  for (int i = 0; i < PROCS_MAX; i++) {
+    struct process *proc = &procs[(current_proc->pid + i) % PROCS_MAX];
+    if (proc->state == PROCS_RUNNABLE && proc->pid > 0) {
+      next = proc;
+      break;
+    }
+  }
+  if (next == current_proc) {
+    return;
+  }
+
+  struct process *prev = current_proc;
+  current_proc = next;
+  switch_context(&prev->sp, &next->sp);
+}
+
 // ディレイ関数
 void delay(void) {
   for (int i = 0; i < 30000000; i++) {
@@ -218,7 +241,8 @@ void proc_a_entry(void) {
   printf("start process_a\n");
   while (1) {
     putchar('A');
-    switch_context(&proc_a->sp, &proc_b->sp);
+    // switch_context(&proc_a->sp, &proc_b->sp);
+    yield();
     delay();
   }
 }
@@ -228,7 +252,8 @@ void proc_b_entry(void) {
   printf("start process_b\n");
   while (1) {
     putchar('B');
-    switch_context(&proc_b->sp, &proc_a->sp);
+    // switch_context(&proc_b->sp, &proc_a->sp);
+    yield();
     delay();
   }
 }
@@ -257,10 +282,18 @@ void kernel_main(void) {
   // 例外処理テスト
   WRITE_CSR(stvec, (uint32_t)kernel_entry);
 
+  // IDLEプロセス生成
+  idle_proc = create_process((uint32_t)NULL);
+  idle_proc->pid = 0;
+  current_proc = idle_proc;
+
   // プロセス生成と起動
   proc_a = create_process((uint32_t)proc_a_entry);
   proc_b = create_process((uint32_t)proc_b_entry);
-  proc_a_entry();
+
+  // スケジューラを呼び出し
+  yield();
+  PANIC("switched to idle process");
 
   // 未定義例外を発生させる(到達しない)
   __asm__ __volatile__("unimp");
