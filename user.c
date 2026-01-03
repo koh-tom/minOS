@@ -2,11 +2,6 @@
 
 extern char __stack_top[];
 
-__attribute__((noreturn)) void exit(void) {
-  for (;;) {
-  }
-}
-
 int syscall(int sysno, int arg0, int arg1, int arg2) {
   register int a0 __asm__("a0") = arg0;
   register int a1 __asm__("a1") = arg1;
@@ -18,6 +13,12 @@ int syscall(int sysno, int arg0, int arg1, int arg2) {
                        : "r"(a0), "r"(a1), "r"(a2), "r"(a3)
                        : "memory");
   return a0;
+}
+
+__attribute__((noreturn)) void exit(void) {
+  syscall(SYS_EXIT, 0, 0, 0);
+  for (;;) {
+  }
 }
 
 void putchar(char ch) { syscall(SYS_PUTCHAR, ch, 0, 0); }
