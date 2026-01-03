@@ -16,6 +16,9 @@
 // ユーザランドのベースアドレス
 #define USER_BASE 0x1000000
 
+// システムコール時の例外原因
+#define SCAUSE_ECALL 8
+
 #define PANIC(fmt, ...)                                                        \
   do {                                                                         \
     printf("PANIC: %s:%d: " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__);      \
