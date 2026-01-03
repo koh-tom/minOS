@@ -6,11 +6,12 @@
 #define PROCS_RUNNABLE 1
 
 #define SATP_SV32 (1u << 31)
-#define PAGE_V (1 << 0) // 有効化ビット
-#define PAGE_R (1 << 1) // 読み取り可能
-#define PAGE_W (1 << 2) // 書き込み可能
-#define PAGE_X (1 << 3) // 実行可能
-#define PAGE_U (1 << 4) // ユーザーレベル
+#define PAGE_V (1 << 0)       // 有効化ビット
+#define PAGE_R (1 << 1)       // 読み取り可能
+#define PAGE_W (1 << 2)       // 書き込み可能
+#define PAGE_X (1 << 3)       // 実行可能
+#define PAGE_U (1 << 4)       // ユーザーレベル
+#define SSTATUS_SPIE (1 << 5) // 動作モード切替(S->U)
 
 // ユーザランドのベースアドレス
 #define USER_BASE 0x1000000
