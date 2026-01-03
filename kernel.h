@@ -12,6 +12,9 @@
 #define PAGE_X (1 << 3) // 実行可能
 #define PAGE_U (1 << 4) // ユーザーレベル
 
+// ユーザランドのベースアドレス
+#define USER_BASE 0x1000000
+
 #define PANIC(fmt, ...)                                                        \
   do {                                                                         \
     printf("PANIC: %s:%d: " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__);      \
