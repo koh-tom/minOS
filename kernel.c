@@ -7,6 +7,10 @@ extern char __free_ram[], __free_ram_end[];
 extern char __kernel_base[];
 extern char _binary_shell_bin_start[], _binary_shell_bin_size[];
 
+// プロトタイプ宣言
+void yield(void);
+void handle_syscall(struct trap_frame *f);
+
 // プロセス管理
 struct process procs[PROCS_MAX];
 struct process *proc_a;
@@ -53,15 +57,10 @@ struct sbiret sbi_call(long arg0, long arg1, long arg2, long arg3, long arg4,
 // 1文字出力用関数
 void putchar(char ch) { sbi_call(ch, 0, 0, 0, 0, 0, 0, 1); }
 
-// システムコールハンドラ
-void handle_syscall(struct trap_frame *f) {
-  switch (f->a3) {
-  case SYS_PUTCHAR:
-    putchar(f->a0);
-    break;
-  default:
-    PANIC("unexpected syscall a3=%x\n", f->a3);
-  }
+// 1文字入力用関数
+long getchar(void) {
+  struct sbiret ret = sbi_call(0, 0, 0, 0, 0, 0, 0, 2);
+  return ret.error;
 }
 
 // トラップハンドラ
@@ -333,6 +332,27 @@ void proc_b_entry(void) {
     // switch_context(&proc_b->sp, &proc_a->sp);
     yield();
     delay();
+  }
+}
+
+// システムコールハンドラ
+void handle_syscall(struct trap_frame *f) {
+  switch (f->a3) {
+  case SYS_PUTCHAR:
+    putchar(f->a0);
+    break;
+  case SYS_GETCHAR:
+    while (1) {
+      long ch = getchar();
+      if (ch >= 0) {
+        f->a0 = ch;
+        break;
+      }
+      yield();
+    }
+    break;
+  default:
+    PANIC("unexpected syscall a3=%x\n", f->a3);
   }
 }
 
