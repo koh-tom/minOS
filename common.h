@@ -12,7 +12,7 @@ typedef uint32_t vaddr_t;
 #define true 1
 #define false 0
 #define NULL ((void *)0)
-#define align_up(value, align) __built_align_up(value, align)
+#define align_up(value, align) __builtin_align_up(value, align)
 #define is_aligned(value, align) __builtin_is_aligned(value, align)
 #define offsetof(type, member) __builtin_offsetof(type, member)
 #define va_list __builtin_va_list

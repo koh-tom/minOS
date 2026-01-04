@@ -10,6 +10,10 @@ extern char _binary_shell_bin_start[], _binary_shell_bin_size[];
 // プロトタイプ宣言
 void yield(void);
 void handle_syscall(struct trap_frame *f);
+uint32_t virtio_reg_read32(unsigned offset);
+uint64_t virtio_reg_read64(unsigned offset);
+void virtio_reg_write32(unsigned offset, uint32_t value);
+void virtio_reg_fetch_and_or32(unsigned offset, uint32_t value);
 
 // プロセス管理
 struct process procs[PROCS_MAX];
@@ -19,6 +23,12 @@ struct process *proc_b;
 // スケジューラ用
 struct process *current_proc;
 struct process *idle_proc;
+
+// VIRTIO用
+struct virtio_virtq *blk_request_vq;
+struct virtio_blk_req *blk_req;
+paddr_t blk_req_paddr;
+uint64_t blk_capacity;
 
 // メモリ管理
 paddr_t alloc_pages(uint32_t n) {
@@ -52,6 +62,22 @@ struct sbiret sbi_call(long arg0, long arg1, long arg2, long arg3, long arg4,
                      "r"(a6), "r"(a7)
                    : "memory");
   return (struct sbiret){.error = a0, .value = a1};
+}
+
+struct virtio_virtq *virtq_init(unsigned index) {
+  paddr_t virtq_paddr =
+      alloc_pages(align_up(sizeof(struct virtio_virtq), PAGE_SIZE) / PAGE_SIZE);
+  struct virtio_virtq *virtq = (struct virtio_virtq *)virtq_paddr;
+  virtq->queue_index = index;
+  virtq->used_index = (volatile uint16_t *)&virtq->used.index;
+
+  // キュー選択
+  virtio_reg_write32(VIRTIO_REG_QUEUE_SEL, index);
+  // キューサイズ
+  virtio_reg_write32(VIRTIO_REG_QUEUE_NUM, VIRTQ_ENTRY_NUM);
+  // キューページフレーム番号
+  virtio_reg_write32(VIRTIO_REG_QUEUE_PFN, virtq_paddr / PAGE_SIZE);
+  return virtq;
 }
 
 // 1文字出力用関数
@@ -261,6 +287,9 @@ struct process *create_process(const void *image, size_t image_size) {
     map_page(page_table, paddr, paddr, PAGE_R | PAGE_W | PAGE_X);
   }
 
+  // 各プロセスのページテーブルにVIRTIOのMMIO領域をマッピング
+  map_page(page_table, VIRTIO_BLK_PADDR, VIRTIO_BLK_PADDR, PAGE_R | PAGE_W);
+
   for (uint32_t off = 0; off < image_size; off += PAGE_SIZE) {
     paddr_t page = alloc_pages(1);
     size_t remaining = image_size - off;
@@ -362,6 +391,127 @@ void handle_syscall(struct trap_frame *f) {
   }
 }
 
+// VIRTIOのMMIOレジスタの読み書き用関数群
+uint32_t virtio_reg_read32(unsigned offset) {
+  return *((volatile uint32_t *)(VIRTIO_BLK_PADDR + offset));
+}
+
+uint64_t virtio_reg_read64(unsigned offset) {
+  return *((volatile uint64_t *)(VIRTIO_BLK_PADDR + offset));
+}
+
+void virtio_reg_write32(unsigned offset, uint32_t value) {
+  *((volatile uint32_t *)(VIRTIO_BLK_PADDR + offset)) = value;
+}
+
+void virtio_reg_fetch_and_or32(unsigned offset, uint32_t value) {
+  virtio_reg_write32(offset, virtio_reg_read32(offset) | value);
+}
+
+// デバイスに新しいリクエストがあることを通知
+void virtq_kick(struct virtio_virtq *virtq, int desc_index) {
+  virtq->avail.ring[virtq->avail.index % VIRTQ_ENTRY_NUM] = desc_index;
+  virtq->avail.index++;
+  __sync_synchronize();
+  virtio_reg_write32(VIRTIO_REG_QUEUE_NOTIFY, virtq->queue_index);
+  virtq->last_used_index++;
+}
+
+// デバイスがリクエストを処理しているか
+bool virtq_is_busy(struct virtio_virtq *virtq) {
+  return virtq->last_used_index != *virtq->used_index;
+}
+
+// ディスクの読み書き
+void read_write_disk(void *buf, unsigned sector, int is_write) {
+  if (sector >= blk_capacity / SECTOR_SIZE) {
+    printf("virtio: tried to read/write sector %d, but capacity is %d\n",
+           sector, blk_capacity / SECTOR_SIZE);
+    return;
+  }
+
+  blk_req->sector = sector;
+  blk_req->type = is_write ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN;
+
+  if (is_write) {
+    memcpy(blk_req->data, buf, SECTOR_SIZE);
+  }
+
+  // ディスクリプタの設定
+  struct virtio_virtq *virtq = blk_request_vq;
+  virtq->descs[0].addr = blk_req_paddr;
+  virtq->descs[0].len = sizeof(uint32_t) * 2 + sizeof(uint64_t);
+  virtq->descs[0].flags = VIRTQ_DESC_F_NEXT;
+  virtq->descs[0].next = 1;
+
+  virtq->descs[1].addr = blk_req_paddr + offsetof(struct virtio_blk_req, data);
+  virtq->descs[1].len = SECTOR_SIZE;
+  virtq->descs[1].flags =
+      VIRTQ_DESC_F_NEXT | (is_write ? 0 : VIRTQ_DESC_F_WRITE);
+  virtq->descs[1].next = 2;
+
+  virtq->descs[2].addr =
+      blk_req_paddr + offsetof(struct virtio_blk_req, status);
+  virtq->descs[2].len = sizeof(uint8_t);
+  virtq->descs[2].flags = VIRTQ_DESC_F_WRITE;
+
+  // 新しいリクエストを通知
+  virtq_kick(virtq, 0);
+
+  // 終了まち
+  while (virtq_is_busy(virtq)) {
+  }
+
+  // 0以外の場合は失敗
+  if (blk_req->status != 0) {
+    printf("virtio: warn: failed to read/write disk sector=%d status=%d\n",
+           sector, blk_req->status);
+    return;
+  }
+
+  // 読み込みの場合はバッハにコピー
+  if (!is_write) {
+    memcpy(buf, blk_req->data, SECTOR_SIZE);
+  }
+}
+
+void virtio_blk_init(void) {
+  if (virtio_reg_read32(VIRTIO_REG_MAGIC) != 0x74726976) {
+    PANIC("virtio : invalid magic value\n");
+  }
+  if (virtio_reg_read32(VIRTIO_REG_VERSION) != 1)
+    PANIC("virtio: invalid version\n");
+  if (virtio_reg_read32(VIRTIO_REG_DEVICE_ID) != VIRTIO_DEVICE_BLK)
+    PANIC("virtio: invalid device id\n");
+
+  // VIRTIOの初期化
+  virtio_reg_write32(VIRTIO_REG_DEVICE_STATUS, 0);
+
+  // Acknowledgeステータスビットを立てる
+  virtio_reg_fetch_and_or32(VIRTIO_REG_DEVICE_STATUS, VIRTIO_STATUS_ACK);
+
+  // Driverステータスビットを立てる
+  virtio_reg_fetch_and_or32(VIRTIO_REG_DEVICE_STATUS, VIRTIO_STATUS_DRIVER);
+
+  // ページサイズを設定(4KB)
+  virtio_reg_write32(VIRTIO_REG_PAGE_SIZE, PAGE_SIZE);
+
+  // ディスク読み書き用のキューを初期化
+  blk_request_vq = virtq_init(0);
+
+  // DriverOKステータスビットを立てる
+  virtio_reg_write32(VIRTIO_REG_DEVICE_STATUS, VIRTIO_STATUS_DRIVER_OK);
+
+  // ディスク容量を取得
+  blk_capacity = virtio_reg_read64(VIRTIO_REG_DEVICE_CONFIG + 0) * SECTOR_SIZE;
+  printf("blk_capacity: %d\n", (int)blk_capacity);
+
+  // デバイス要求用のメモリを確保
+  blk_req_paddr =
+      alloc_pages(align_up(sizeof(*blk_req), PAGE_SIZE) / PAGE_SIZE);
+  blk_req = (struct virtio_blk_req *)blk_req_paddr;
+}
+
 // カーネルメイン
 void kernel_main(void) {
   // BSS領域をゼロ初期化
@@ -385,6 +535,17 @@ void kernel_main(void) {
 
   // 例外処理テスト
   WRITE_CSR(stvec, (uint32_t)kernel_entry);
+
+  // VIRTIO初期化
+  virtio_blk_init();
+
+  // ディスクの内容を確認
+  char buf[SECTOR_SIZE];
+  read_write_disk(buf, 0, false);
+  printf("first sector: %s\n", buf);
+
+  strcpy(buf, "hello from kernel!!!\n");
+  read_write_disk(buf, 0, true);
 
   // IDLEプロセス生成
   idle_proc = create_process(NULL, 0);
