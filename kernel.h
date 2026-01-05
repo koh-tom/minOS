@@ -14,6 +14,7 @@
 #define PAGE_X (1 << 3)       // 実行可能
 #define PAGE_U (1 << 4)       // ユーザーレベル
 #define SSTATUS_SPIE (1 << 5) // 動作モード切替(S->U)
+#define SSTATUS_SUM (1 << 18) // ユーザーレベルでメモリアクセスを許可
 
 // ユーザランドのベースアドレス
 #define USER_BASE 0x1000000

@@ -25,6 +25,14 @@ void putchar(char ch) { syscall(SYS_PUTCHAR, ch, 0, 0); }
 
 int getchar(void) { return syscall(SYS_GETCHAR, 0, 0, 0); }
 
+int readfile(const char *filename, char *buf, int len) {
+  return syscall(SYS_READFILE, (int)filename, (int)buf, len);
+}
+
+int writefile(const char *filename, const char *buf, int len) {
+  return syscall(SYS_WRITEFILE, (int)filename, (int)buf, len);
+}
+
 __attribute__((section(".text.start"))) __attribute__((naked)) void
 start(void) {
   __asm__ __volatile__("mv sp, %[stack_top]\n"
