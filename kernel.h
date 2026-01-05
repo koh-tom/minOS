@@ -21,6 +21,12 @@
 // システムコール時の例外原因
 #define SCAUSE_ECALL 8
 
+// ファイルシステム用
+#define FILES_MAX 2
+
+// ディスクのサイスイメージの最大サイズ
+#define DISK_MAX_SIZE align_up(sizeof(struct file) * FILES_MAX, PAGE_SIZE)
+
 // VIRTIO用
 #define SECTOR_SIZE 512
 #define VIRTQ_ENTRY_NUM 16
@@ -159,3 +165,33 @@ struct virtio_blk_req {
   // ディスクリプタ3:書き込み可
   uint8_t status;
 } __attribute__((packed));
+
+// tarファイルのヘッダ構造体
+struct tar_header {
+  char name[100];
+  char mode[8];
+  char uid[8];
+  char gid[8];
+  char size[12];
+  char mtime[12];
+  char checksum[8];
+  char type;
+  char linkname[100];
+  char magic[6];
+  char version[2];
+  char uname[32];
+  char gname[32];
+  char devmajor[8];
+  char devminor[8];
+  char prefix[155];
+  char padding[12];
+  char data[];
+} __attribute__((packed));
+
+// ファイル構造体
+struct file {
+  bool in_use;     // 使用しているか
+  char name[100];  // ファイル名
+  char data[1024]; // ファイルの中身
+  size_t size;     // ファイルサイズ
+};

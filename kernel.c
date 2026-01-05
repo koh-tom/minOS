@@ -14,6 +14,7 @@ uint32_t virtio_reg_read32(unsigned offset);
 uint64_t virtio_reg_read64(unsigned offset);
 void virtio_reg_write32(unsigned offset, uint32_t value);
 void virtio_reg_fetch_and_or32(unsigned offset, uint32_t value);
+void fs_flush(void);
 
 // プロセス管理
 struct process procs[PROCS_MAX];
@@ -29,6 +30,20 @@ struct virtio_virtq *blk_request_vq;
 struct virtio_blk_req *blk_req;
 paddr_t blk_req_paddr;
 uint64_t blk_capacity;
+
+// ファイルシステム用
+struct file files[FILES_MAX];
+uint8_t disk[DISK_MAX_SIZE];
+
+struct file *fs_lookup(const char *filename) {
+  for (int i = 0; i < FILES_MAX; i++) {
+    struct file *file = &files[i];
+    if (!strcmp(file->name, filename))
+      return file;
+  }
+
+  return NULL;
+}
 
 // メモリ管理
 paddr_t alloc_pages(uint32_t n) {
@@ -512,6 +527,44 @@ void virtio_blk_init(void) {
   blk_req = (struct virtio_blk_req *)blk_req_paddr;
 }
 
+// 8進数文字列を整数に変換
+int oct2int(char *oct, int len) {
+  int dec = 0;
+  for (int i = 0; i < len; i++) {
+    if (oct[i] < '0' || oct[i] > '7')
+      break;
+
+    dec = dec * 8 + (oct[i] - '0');
+  }
+  return dec;
+}
+
+// ファイルシステムの初期化
+void fs_init(void) {
+  for (unsigned sector = 0; sector < sizeof(disk) / SECTOR_SIZE; sector++)
+    read_write_disk(&disk[sector * SECTOR_SIZE], sector, false);
+
+  unsigned off = 0;
+  for (int i = 0; i < FILES_MAX; i++) {
+    struct tar_header *header = (struct tar_header *)&disk[off];
+    if (header->name[0] == '\0')
+      break;
+
+    if (strcmp(header->magic, "ustar") != 0)
+      PANIC("invalid tar header: magic=\"%s\"", header->magic);
+
+    int filesz = oct2int(header->size, sizeof(header->size));
+    struct file *file = &files[i];
+    file->in_use = true;
+    strcpy(file->name, header->name);
+    memcpy(file->data, header->data, filesz);
+    file->size = filesz;
+    printf("file: %s, size=%d\n", file->name, file->size);
+
+    off += align_up(sizeof(struct tar_header) + filesz, SECTOR_SIZE);
+  }
+}
+
 // カーネルメイン
 void kernel_main(void) {
   // BSS領域をゼロ初期化
@@ -538,6 +591,9 @@ void kernel_main(void) {
 
   // VIRTIO初期化
   virtio_blk_init();
+
+  // ファイルシステム初期化
+  fs_init();
 
   // ディスクの内容を確認
   char buf[SECTOR_SIZE];
