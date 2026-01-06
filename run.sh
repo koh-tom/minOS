@@ -23,8 +23,11 @@ $CC $CFLAGS -Wl,-Tkernel.ld -Wl,-Map=kernel.map -o kernel.elf \
 (cd disk && tar cf ../disk.tar --format=ustar *.txt)
 
 # QEMUを起動
-$QEMU -machine virt -bios default -nographic -serial mon:stdio --no-reboot \
+$QEMU -machine virt -bios default -serial mon:stdio --no-reboot \
     -d unimp,guest_errors,int,cpu_reset -D qemu.log \
     -drive id=drive0,file=disk.tar,format=raw,if=none \
     -device virtio-blk-device,drive=drive0,bus=virtio-mmio-bus.0 \
+    -device virtio-gpu-device,bus=virtio-mmio-bus.1 \
+    -device virtio-keyboard-device,bus=virtio-mmio-bus.2 \
+    -device virtio-mouse-device,bus=virtio-mmio-bus.3 \
     -kernel kernel.elf

@@ -10,10 +10,10 @@ extern char _binary_shell_bin_start[], _binary_shell_bin_size[];
 // プロトタイプ宣言
 void yield(void);
 void handle_syscall(struct trap_frame *f);
-uint32_t virtio_reg_read32(unsigned offset);
-uint64_t virtio_reg_read64(unsigned offset);
-void virtio_reg_write32(unsigned offset, uint32_t value);
-void virtio_reg_fetch_and_or32(unsigned offset, uint32_t value);
+uint32_t virtio_reg_read32(uint32_t base, unsigned offset);
+uint64_t virtio_reg_read64(uint32_t base, unsigned offset);
+void virtio_reg_write32(uint32_t base, unsigned offset, uint32_t value);
+void virtio_reg_fetch_and_or32(uint32_t base, unsigned offset, uint32_t value);
 void fs_flush(void);
 
 // プロセス管理
@@ -79,19 +79,20 @@ struct sbiret sbi_call(long arg0, long arg1, long arg2, long arg3, long arg4,
   return (struct sbiret){.error = a0, .value = a1};
 }
 
-struct virtio_virtq *virtq_init(unsigned index) {
+struct virtio_virtq *virtq_init(uint32_t base, unsigned index) {
   paddr_t virtq_paddr =
       alloc_pages(align_up(sizeof(struct virtio_virtq), PAGE_SIZE) / PAGE_SIZE);
   struct virtio_virtq *virtq = (struct virtio_virtq *)virtq_paddr;
   virtq->queue_index = index;
   virtq->used_index = (volatile uint16_t *)&virtq->used.index;
+  virtq->reg_base = base;
 
   // キュー選択
-  virtio_reg_write32(VIRTIO_REG_QUEUE_SEL, index);
+  virtio_reg_write32(base, VIRTIO_REG_QUEUE_SEL, index);
   // キューサイズ
-  virtio_reg_write32(VIRTIO_REG_QUEUE_NUM, VIRTQ_ENTRY_NUM);
+  virtio_reg_write32(base, VIRTIO_REG_QUEUE_NUM, VIRTQ_ENTRY_NUM);
   // キューページフレーム番号
-  virtio_reg_write32(VIRTIO_REG_QUEUE_PFN, virtq_paddr / PAGE_SIZE);
+  virtio_reg_write32(base, VIRTIO_REG_QUEUE_PFN, virtq_paddr / PAGE_SIZE);
   return virtq;
 }
 
@@ -434,28 +435,32 @@ void handle_syscall(struct trap_frame *f) {
 }
 
 // VIRTIOのMMIOレジスタの読み書き用関数群
-uint32_t virtio_reg_read32(unsigned offset) {
-  return *((volatile uint32_t *)(VIRTIO_BLK_PADDR + offset));
+// VIRTIOのMMIOレジスタの読み書き用関数群
+uint32_t virtio_reg_read32(uint32_t base, unsigned offset) {
+  return *((volatile uint32_t *)(base + offset));
 }
 
-uint64_t virtio_reg_read64(unsigned offset) {
-  return *((volatile uint64_t *)(VIRTIO_BLK_PADDR + offset));
+uint64_t virtio_reg_read64(uint32_t base, unsigned offset) {
+  return *((volatile uint64_t *)(base + offset));
 }
 
-void virtio_reg_write32(unsigned offset, uint32_t value) {
-  *((volatile uint32_t *)(VIRTIO_BLK_PADDR + offset)) = value;
+void virtio_reg_write32(uint32_t base, unsigned offset, uint32_t value) {
+  *((volatile uint32_t *)(base + offset)) = value;
 }
 
-void virtio_reg_fetch_and_or32(unsigned offset, uint32_t value) {
-  virtio_reg_write32(offset, virtio_reg_read32(offset) | value);
+void virtio_reg_fetch_and_or32(uint32_t base, unsigned offset, uint32_t value) {
+  virtio_reg_write32(base, offset, virtio_reg_read32(base, offset) | value);
 }
 
 // デバイスに新しいリクエストがあることを通知
 void virtq_kick(struct virtio_virtq *virtq, int desc_index) {
+  // printf("virtq_kick: reg_base=%x, queue_index=%d\n", virtq->reg_base,
+  // virtq->queue_index);
   virtq->avail.ring[virtq->avail.index % VIRTQ_ENTRY_NUM] = desc_index;
   virtq->avail.index++;
   __sync_synchronize();
-  virtio_reg_write32(VIRTIO_REG_QUEUE_NOTIFY, virtq->queue_index);
+  virtio_reg_write32(virtq->reg_base, VIRTIO_REG_QUEUE_NOTIFY,
+                     virtq->queue_index);
   virtq->last_used_index++;
 }
 
@@ -518,40 +523,191 @@ void read_write_disk(void *buf, unsigned sector, int is_write) {
 }
 
 void virtio_blk_init(void) {
-  if (virtio_reg_read32(VIRTIO_REG_MAGIC) != 0x74726976) {
+  if (virtio_reg_read32(VIRTIO_BLK_PADDR, VIRTIO_REG_MAGIC) != 0x74726976) {
     PANIC("virtio : invalid magic value\n");
   }
-  if (virtio_reg_read32(VIRTIO_REG_VERSION) != 1)
+  if (virtio_reg_read32(VIRTIO_BLK_PADDR, VIRTIO_REG_VERSION) != 1)
     PANIC("virtio: invalid version\n");
-  if (virtio_reg_read32(VIRTIO_REG_DEVICE_ID) != VIRTIO_DEVICE_BLK)
+  if (virtio_reg_read32(VIRTIO_BLK_PADDR, VIRTIO_REG_DEVICE_ID) !=
+      VIRTIO_DEVICE_BLK)
     PANIC("virtio: invalid device id\n");
 
   // VIRTIOの初期化
-  virtio_reg_write32(VIRTIO_REG_DEVICE_STATUS, 0);
+  virtio_reg_write32(VIRTIO_BLK_PADDR, VIRTIO_REG_DEVICE_STATUS, 0);
 
   // Acknowledgeステータスビットを立てる
-  virtio_reg_fetch_and_or32(VIRTIO_REG_DEVICE_STATUS, VIRTIO_STATUS_ACK);
+  virtio_reg_fetch_and_or32(VIRTIO_BLK_PADDR, VIRTIO_REG_DEVICE_STATUS,
+                            VIRTIO_STATUS_ACK);
 
   // Driverステータスビットを立てる
-  virtio_reg_fetch_and_or32(VIRTIO_REG_DEVICE_STATUS, VIRTIO_STATUS_DRIVER);
+  virtio_reg_fetch_and_or32(VIRTIO_BLK_PADDR, VIRTIO_REG_DEVICE_STATUS,
+                            VIRTIO_STATUS_DRIVER);
 
   // ページサイズを設定(4KB)
-  virtio_reg_write32(VIRTIO_REG_PAGE_SIZE, PAGE_SIZE);
+  virtio_reg_write32(VIRTIO_BLK_PADDR, VIRTIO_REG_PAGE_SIZE, PAGE_SIZE);
 
   // ディスク読み書き用のキューを初期化
-  blk_request_vq = virtq_init(0);
+  blk_request_vq = virtq_init(VIRTIO_BLK_PADDR, 0);
 
   // DriverOKステータスビットを立てる
-  virtio_reg_write32(VIRTIO_REG_DEVICE_STATUS, VIRTIO_STATUS_DRIVER_OK);
+  virtio_reg_write32(VIRTIO_BLK_PADDR, VIRTIO_REG_DEVICE_STATUS,
+                     VIRTIO_STATUS_DRIVER_OK);
 
   // ディスク容量を取得
-  blk_capacity = virtio_reg_read64(VIRTIO_REG_DEVICE_CONFIG + 0) * SECTOR_SIZE;
+  blk_capacity =
+      virtio_reg_read64(VIRTIO_BLK_PADDR, VIRTIO_REG_DEVICE_CONFIG + 0) *
+      SECTOR_SIZE;
   printf("blk_capacity: %d\n", (int)blk_capacity);
 
   // デバイス要求用のメモリを確保
   blk_req_paddr =
       alloc_pages(align_up(sizeof(*blk_req), PAGE_SIZE) / PAGE_SIZE);
   blk_req = (struct virtio_blk_req *)blk_req_paddr;
+}
+
+uint32_t virtio_gpu_paddr = 0;
+struct virtio_virtq *gpu_control_vq;
+struct virtio_gpu_config *gpu_config;
+uint32_t screen_w = 640;
+uint32_t screen_h = 480;
+uint32_t *framebuffer;
+
+// GPUにリクエストを送信し、応答を待つ
+void virtio_gpu_send_req(void *req, int len) {
+  struct virtio_gpu_ctrl_hdr *hdr = (struct virtio_gpu_ctrl_hdr *)req;
+  hdr->flags = VIRTIO_GPU_FLAG_FENCE;
+  hdr->fence_id = 0;
+  hdr->ctx_id = 0;
+
+  // リクエスト用のディスクリプタを設定
+  struct virtio_virtq *virtq = gpu_control_vq;
+  virtq->descs[0].addr = (uint32_t)req;
+  virtq->descs[0].len = len;
+  virtq->descs[0].flags = VIRTQ_DESC_F_NEXT;
+  virtq->descs[0].next = 1;
+
+  // レスポンス用のディスクリプタを設定
+  virtq->descs[1].addr = (uint32_t)req;
+  virtq->descs[1].len = sizeof(struct virtio_gpu_ctrl_hdr);
+  virtq->descs[1].flags = VIRTQ_DESC_F_WRITE;
+  virtq->descs[1].next = 0;
+
+  // キック & Wait
+  virtq->avail.ring[virtq->avail.index % VIRTQ_ENTRY_NUM] = 0;
+  virtq->avail.index++;
+  __sync_synchronize();
+  virtio_reg_write32(virtq->reg_base, VIRTIO_REG_QUEUE_NOTIFY,
+                     virtq->queue_index);
+  virtq->last_used_index++;
+
+  // ポーリング
+  while (virtq->last_used_index != *virtq->used_index) {
+  }
+}
+
+void virtio_gpu_init(void) {
+  printf("Probing for Virtio-GPU...\n");
+  uint32_t *paddr = (uint32_t *)VIRTIO_BLK_PADDR;
+  // MMIO領域をスキャンしてGPUを探す
+  bool found = false;
+  for (int i = 0; i < 8; i++) {
+    uint32_t magic = paddr[0];
+    uint32_t device_id = paddr[2];
+    if (magic == 0x74726976 && device_id == VIRTIO_DEVICE_GPU) {
+      printf("found virtio-gpu at %x\n", (uint32_t)paddr);
+      virtio_gpu_paddr = (uint32_t)paddr;
+      found = true;
+      break;
+    }
+    paddr = (uint32_t *)((uint32_t)paddr + 0x1000);
+  }
+
+  if (!found)
+    PANIC("virtio-gpu not found");
+
+  // デバイスの初期化
+  virtio_reg_write32(virtio_gpu_paddr, VIRTIO_REG_DEVICE_STATUS, 0);
+  virtio_reg_fetch_and_or32(virtio_gpu_paddr, VIRTIO_REG_DEVICE_STATUS,
+                            VIRTIO_STATUS_ACK);
+  virtio_reg_fetch_and_or32(virtio_gpu_paddr, VIRTIO_REG_DEVICE_STATUS,
+                            VIRTIO_STATUS_DRIVER);
+
+  virtio_reg_write32(virtio_gpu_paddr, VIRTIO_REG_PAGE_SIZE, PAGE_SIZE);
+
+  // Control Queue (index 0) の初期化
+  gpu_control_vq = virtq_init(virtio_gpu_paddr, 0);
+
+  // DriverOK
+  virtio_reg_write32(virtio_gpu_paddr, VIRTIO_REG_DEVICE_STATUS,
+                     VIRTIO_STATUS_DRIVER_OK);
+
+  // フレームバッファの確保
+  framebuffer = (uint32_t *)alloc_pages(
+      align_up(screen_w * screen_h * 4, PAGE_SIZE) / PAGE_SIZE);
+  memset(framebuffer, 0, screen_w * screen_h * 4);
+
+  // 1. 2Dリソース作成
+  struct virtio_gpu_resource_create_2d res_create = {0};
+  res_create.hdr.type = VIRTIO_GPU_CMD_RESOURCE_CREATE_2D;
+  res_create.resource_id = 1;
+  res_create.format = VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM;
+  res_create.width = screen_w;
+  res_create.height = screen_h;
+  virtio_gpu_send_req(&res_create, sizeof(res_create));
+
+  // 2. バッキングストレージのアタッチ
+  struct {
+    struct virtio_gpu_resource_attach_backing attach;
+    struct virtio_gpu_mem_entry entry;
+  } __attribute__((packed)) req_attach = {0};
+
+  req_attach.attach.hdr.type = VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING;
+  req_attach.attach.resource_id = 1;
+  req_attach.attach.nr_entries = 1;
+  req_attach.entry.addr = (uint32_t)framebuffer;
+  req_attach.entry.length = screen_w * screen_h * 4;
+  virtio_gpu_send_req(&req_attach, sizeof(req_attach));
+
+  // 3. スキャンアウト設定
+  struct virtio_gpu_set_scanout set_scanout = {0};
+  set_scanout.hdr.type = VIRTIO_GPU_CMD_SET_SCANOUT;
+  set_scanout.r.x = 0;
+  set_scanout.r.y = 0;
+  set_scanout.r.width = screen_w;
+  set_scanout.r.height = screen_h;
+  set_scanout.scanout_id = 0;
+  set_scanout.resource_id = 1;
+  virtio_gpu_send_req(&set_scanout, sizeof(set_scanout));
+
+  // 画面を青で塗りつぶすテスト
+  for (uint32_t y = 0; y < screen_h; y++) {
+    for (uint32_t x = 0; x < screen_w; x++) {
+      framebuffer[y * screen_w + x] =
+          0xFF0000FF; // ABGR: Red=00, Green=00, Blue=FF
+    }
+  }
+
+  // 4. 転送とフラッシュ
+  struct virtio_gpu_transfer_to_host_2d transfer = {0};
+  transfer.hdr.type = VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D;
+  transfer.r.x = 0;
+  transfer.r.y = 0;
+  transfer.r.width = screen_w;
+  transfer.r.height = screen_h;
+  transfer.offset = 0;
+  transfer.resource_id = 1;
+  virtio_gpu_send_req(&transfer, sizeof(transfer));
+
+  struct virtio_gpu_resource_flush flush = {0};
+  flush.hdr.type = VIRTIO_GPU_CMD_RESOURCE_FLUSH;
+  flush.r.x = 0;
+  flush.r.y = 0;
+  flush.r.width = screen_w;
+  flush.r.height = screen_h;
+  flush.resource_id = 1;
+  virtio_gpu_send_req(&flush, sizeof(flush));
+
+  printf("GPU Initialized. Screen cleared to Blue.\n");
 }
 
 // 8進数文字列を整数に変換
@@ -665,6 +821,9 @@ void kernel_main(void) {
 
   // VIRTIO初期化
   virtio_blk_init();
+
+  // GPU初期化 (プロービングのみ)
+  virtio_gpu_init();
 
   // ファイルシステム初期化
   fs_init();
