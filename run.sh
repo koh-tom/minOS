@@ -17,7 +17,7 @@ $OBJCOPY -Ibinary -Oelf32-littleriscv shell.bin shell.bin.o
 
 # カーネルをビルド
 $CC $CFLAGS -Wl,-Tkernel.ld -Wl,-Map=kernel.map -o kernel.elf \
-    kernel.c common.c shell.bin.o
+    kernel.c common.c font.c shell.bin.o
 
 # ディスクをビルド
 (cd disk && tar cf ../disk.tar --format=ustar *.txt)

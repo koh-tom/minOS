@@ -605,6 +605,37 @@ void virtio_gpu_send_req(void *req, int len) {
   }
 }
 
+extern uint8_t font_bitmap[256][16];
+
+void draw_char(char c, int x, int y, uint32_t color) {
+  for (int dy = 0; dy < 16; dy++) {
+    uint8_t row = font_bitmap[(uint8_t)c][dy];
+    for (int dx = 0; dx < 8; dx++) {
+      if ((row >> (7 - dx)) & 1) {
+        if (x + dx < screen_w && y + dy < screen_h) {
+          // B8G8R8A8 format, little endian
+          framebuffer[(y + dy) * screen_w + (x + dx)] = color;
+        }
+      }
+    }
+  }
+}
+
+void draw_string(const char *s, int x, int y, uint32_t color) {
+  int cx = x;
+  int cy = y;
+  while (*s) {
+    if (*s == '\n') {
+      cx = x;
+      cy += 16;
+    } else {
+      draw_char(*s, cx, cy, color);
+      cx += 8;
+    }
+    s++;
+  }
+}
+
 void virtio_gpu_init(void) {
   printf("Probing for Virtio-GPU...\n");
   uint32_t *paddr = (uint32_t *)VIRTIO_BLK_PADDR;
@@ -686,6 +717,10 @@ void virtio_gpu_init(void) {
           0xFF0000FF; // ABGR: Red=00, Green=00, Blue=FF
     }
   }
+
+  // 文字描画テスト
+  draw_string("Hello Virtio-GPU World!", 50, 50, 0xFFFFFFFF); // White text
+  draw_string("minOS is running...", 50, 70, 0xFF00FF00);     // Green text
 
   // 4. 転送とフラッシュ
   struct virtio_gpu_transfer_to_host_2d transfer = {0};
