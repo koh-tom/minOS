@@ -23,7 +23,7 @@
 #define SCAUSE_ECALL 8
 
 // ファイルシステム用
-#define FILES_MAX 2
+#define FILES_MAX 10
 
 // ディスクのサイスイメージの最大サイズ
 #define DISK_MAX_SIZE align_up(sizeof(struct file) * FILES_MAX, PAGE_SIZE)

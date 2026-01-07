@@ -51,6 +51,8 @@ void main(void) {
       printf("%s\n", buf);
     } else if (strcmp(cmdline, "writefile") == 0) {
       writefile("hello.txt", "Hello from shell!\n", 19);
+    } else if (strcmp(cmdline, "ls") == 0) { // lsコマンド
+      ls();
     } else if (cmdline[0] != '\0') {
       printf("unknown command: %s\n", cmdline);
     }
