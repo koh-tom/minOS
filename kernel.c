@@ -35,6 +35,14 @@ uint64_t blk_capacity;
 struct file files[FILES_MAX];
 uint8_t disk[DISK_MAX_SIZE];
 
+uint32_t keyboard_paddr = 0;
+struct virtio_virtq *keyboard_vq;
+struct virtio_input_event keyboard_event_bufs[VIRTQ_ENTRY_NUM];
+
+uint32_t mouse_paddr = 0;
+struct virtio_virtq *mouse_vq;
+struct virtio_input_event mouse_event_bufs[VIRTQ_ENTRY_NUM];
+
 struct file *fs_lookup(const char *filename) {
   for (int i = 0; i < FILES_MAX; i++) {
     struct file *file = &files[i];
@@ -96,13 +104,99 @@ struct virtio_virtq *virtq_init(uint32_t base, unsigned index) {
   return virtq;
 }
 
+void plic_init(void);
+void virtio_input_init(void);
+
+// 外部割り込み用SCause (最上位ビットが1)
+#define SCAUSE_INTERRUPT 0x80000000
+#define SCAUSE_EXTERNAL_INTERRUPT (SCAUSE_INTERRUPT | 9)
+
 // 1文字出力用関数
 void putchar(char ch) { sbi_call(ch, 0, 0, 0, 0, 0, 0, 1); }
 
-// 1文字入力用関数
+// PLICの初期化
+void plic_init(void) {
+  // すべての割り込みの優先度を1(最低)にする
+  for (int i = 1; i <= 32; i++) {
+    virtio_reg_write32(PLIC_PRIORITY(i), 0, 1);
+  }
+
+  // Hart 0 の S-Mode に対してキーボード、マウスの割り込みを有効化
+  virtio_reg_write32(PLIC_SENABLE(0, 0), 0,
+                     (1 << VIRTIO_KEYBOARD_IRQ) | (1 << VIRTIO_MOUSE_IRQ));
+
+  // 割り込みのしきい値を0（すべて通す）に設定
+  virtio_reg_write32(PLIC_SPRIORITY(0), 0, 0);
+
+  // CPU側の外部割り込み許可 (SIE.SEIE)
+  WRITE_CSR(sie, READ_CSR(sie) | SIE_SEIE);
+
+  // 全体的な割り込み有効化 (SSTATUS.SIE)
+  WRITE_CSR(sstatus, READ_CSR(sstatus) | SSTATUS_SIE);
+}
+
+// キーボードイベントのリングバッファ
+struct virtio_input_event keyboard_queue[64];
+int keyboard_head = 0;
+int keyboard_tail = 0;
+
+void keyboard_push(struct virtio_input_event event) {
+  int next = (keyboard_head + 1) % 64;
+  if (next != keyboard_tail) {
+    keyboard_queue[keyboard_head] = event;
+    keyboard_head = next;
+  }
+}
+
+struct virtio_input_event *keyboard_pop(void) {
+  if (keyboard_head == keyboard_tail) {
+    return NULL;
+  }
+  struct virtio_input_event *event = &keyboard_queue[keyboard_tail];
+  keyboard_tail = (keyboard_tail + 1) % 64;
+  return event;
+}
+
+int key2char(uint16_t code) {
+  if (code >= 2 && code <= 11)
+    return "1234567890"[code - 2];
+  if (code >= 16 && code <= 25)
+    return "qwertyuiop"[code - 16];
+  if (code >= 30 && code <= 38)
+    return "asdfghjkl"[code - 30];
+  if (code >= 44 && code <= 50)
+    return "zxcvbnm"[code - 44];
+
+  if (code == 57)
+    return ' ';
+  if (code == 28)
+    return '\n';
+  if (code == 14)
+    return '\b';
+  return 0;
+}
+
+// 1文字入力用関数 (Virtio-Input経由)
+// 1文字入力用関数 (Virtio-Input または SBI経由)
 long getchar(void) {
+  // 1. Virtio-Keyboard の入力をチェック
+  struct virtio_input_event *event = keyboard_pop();
+  if (event) {
+    // Value=1 (Press) または Value=2 (Repeat) のみ処理
+    if ((event->value == 1 || event->value == 2) && event->type == 1) {
+      int ch = key2char(event->code);
+      if (ch)
+        return ch;
+    }
+  }
+
+  // 2. シリアルポート(SBI) の入力をチェック
   struct sbiret ret = sbi_call(0, 0, 0, 0, 0, 0, 0, 2);
-  return ret.error;
+  if (ret.error != -1) {
+    return ret.error;
+  }
+
+  return -1;
 }
 
 // トラップハンドラ
@@ -114,6 +208,53 @@ void handle_trap(struct trap_frame *f) {
   if (scause == SCAUSE_ECALL) {
     handle_syscall(f);
     user_pc += 4;
+  } else if (scause == SCAUSE_EXTERNAL_INTERRUPT) {
+    // 外部割り込み (PLIC経由)
+    uint32_t irq = virtio_reg_read32(PLIC_SCLAIM(0), 0);
+    // printf("IRQ: %d\n", irq); // デバッグ用
+
+    if (irq == VIRTIO_KEYBOARD_IRQ && keyboard_vq) {
+      // キーボード割り込みの処理
+      while (keyboard_vq->last_used_index != *keyboard_vq->used_index) {
+        struct virtq_used_elem *e =
+            &keyboard_vq->used
+                 .ring[keyboard_vq->last_used_index % VIRTQ_ENTRY_NUM];
+        uint32_t desc_idx = e->id;
+
+        // デバイスから書き込まれたイベントを取得
+        struct virtio_input_event *event =
+            (struct virtio_input_event *)keyboard_vq->descs[desc_idx].addr;
+
+        if (event->type == 1) {
+          keyboard_push(*event);
+        }
+
+        // バッファを再利用のためにAvailリングに戻す
+        keyboard_vq->avail.ring[keyboard_vq->avail.index % VIRTQ_ENTRY_NUM] =
+            desc_idx;
+        keyboard_vq->avail.index++;
+        keyboard_vq->last_used_index++;
+      }
+      __sync_synchronize();
+      virtio_reg_write32(keyboard_paddr, VIRTIO_REG_QUEUE_NOTIFY, 0);
+    } else if (irq == VIRTIO_MOUSE_IRQ && mouse_vq) {
+      // マウス割り込みの処理 (同様にバッファを空けるだけ)
+      while (mouse_vq->last_used_index != *mouse_vq->used_index) {
+        uint32_t desc_idx =
+            mouse_vq->used.ring[mouse_vq->last_used_index % VIRTQ_ENTRY_NUM].id;
+        mouse_vq->avail.ring[mouse_vq->avail.index % VIRTQ_ENTRY_NUM] =
+            desc_idx;
+        mouse_vq->avail.index++;
+        mouse_vq->last_used_index++;
+      }
+      __sync_synchronize();
+      virtio_reg_write32(mouse_paddr, VIRTIO_REG_QUEUE_NOTIFY, 0);
+    }
+
+    // 完了を通知
+    if (irq) {
+      virtio_reg_write32(PLIC_SCLAIM(0), 0, irq);
+    }
   } else {
     PANIC("unexpected trap scause=%x, stval=%x, sepc=%x\n", scause, stval,
           user_pc);
@@ -304,8 +445,19 @@ struct process *create_process(const void *image, size_t image_size) {
     map_page(page_table, paddr, paddr, PAGE_R | PAGE_W | PAGE_X);
   }
 
-  // 各プロセスのページテーブルにVIRTIOのMMIO領域をマッピング
-  map_page(page_table, VIRTIO_BLK_PADDR, VIRTIO_BLK_PADDR, PAGE_R | PAGE_W);
+  // VIRTIOのMMIO領域をマッピング
+  for (paddr_t paddr = VIRTIO_BLK_PADDR; paddr < VIRTIO_BLK_PADDR + 0x8000;
+       paddr += PAGE_SIZE) {
+    map_page(page_table, paddr, paddr, PAGE_R | PAGE_W);
+  }
+
+  // PLICのMMIO領域をマッピング (0x0c000000 ~ 0x0c0400000, 4MB)
+  for (paddr_t paddr = PLIC_BASE; paddr < PLIC_BASE + 0x400000;
+       paddr += PAGE_SIZE) {
+    if (paddr >= 0x10000000) // 念のため
+      break;
+    map_page(page_table, paddr, paddr, PAGE_R | PAGE_W);
+  }
 
   for (uint32_t off = 0; off < image_size; off += PAGE_SIZE) {
     paddr_t page = alloc_pages(1);
@@ -388,14 +540,7 @@ void handle_syscall(struct trap_frame *f) {
     putchar(f->a0);
     break;
   case SYS_GETCHAR:
-    while (1) {
-      long ch = getchar();
-      if (ch >= 0) {
-        f->a0 = ch;
-        break;
-      }
-      yield();
-    }
+    f->a0 = getchar();
     break;
   case SYS_EXIT:
     printf("process %d exited\n", current_proc->pid);
@@ -839,6 +984,61 @@ void fs_flush(void) {
   printf("wrote %d bytes to disk\n", sizeof(disk));
 }
 
+void virtio_input_init(void) {
+  uint32_t *paddr = (uint32_t *)VIRTIO_BLK_PADDR;
+  for (int i = 0; i < 8; i++) {
+    uint32_t magic = paddr[0];
+    uint32_t device_id = paddr[2];
+
+    if (magic == 0x74726976 && device_id == VIRTIO_DEVICE_INPUT) {
+      // Inputデバイス発見。サブタイプを確認
+      // Virtio-InputのConfig領域([0x100...])を読み取る
+      // 簡易的にIRQ番号(i+1)でKeyboardかMouseか判断(QEMUの引数順に依存)
+      uint32_t irq = i + 1;
+      uint32_t base = (uint32_t)paddr;
+
+      virtio_reg_write32(base, VIRTIO_REG_DEVICE_STATUS, 0);
+      virtio_reg_fetch_and_or32(base, VIRTIO_REG_DEVICE_STATUS,
+                                VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER);
+      virtio_reg_write32(base, VIRTIO_REG_PAGE_SIZE, PAGE_SIZE);
+
+      struct virtio_virtq *vq = virtq_init(base, 0); // Event Queue (index 0)
+
+      if (irq == VIRTIO_KEYBOARD_IRQ) {
+        printf("found keyboard at %x\n", base);
+        keyboard_paddr = base;
+        keyboard_vq = vq;
+        // イベントバッファをセット
+        for (int j = 0; j < VIRTQ_ENTRY_NUM; j++) {
+          vq->descs[j].addr = (uint32_t)&keyboard_event_bufs[j];
+          vq->descs[j].len = sizeof(struct virtio_input_event);
+          vq->descs[j].flags = VIRTQ_DESC_F_WRITE;
+          vq->avail.ring[j] = j;
+        }
+        vq->avail.index = VIRTQ_ENTRY_NUM;
+      } else if (irq == VIRTIO_MOUSE_IRQ) {
+        printf("found mouse at %x\n", base);
+        mouse_paddr = base;
+        mouse_vq = vq;
+        // イベントバッファをセット
+        for (int j = 0; j < VIRTQ_ENTRY_NUM; j++) {
+          vq->descs[j].addr = (uint32_t)&mouse_event_bufs[j];
+          vq->descs[j].len = sizeof(struct virtio_input_event);
+          vq->descs[j].flags = VIRTQ_DESC_F_WRITE;
+          vq->avail.ring[j] = j;
+        }
+        vq->avail.index = VIRTQ_ENTRY_NUM;
+      }
+
+      __sync_synchronize();
+      virtio_reg_write32(base, VIRTIO_REG_QUEUE_NOTIFY, 0);
+      virtio_reg_write32(base, VIRTIO_REG_DEVICE_STATUS,
+                         VIRTIO_STATUS_DRIVER_OK);
+    }
+    paddr = (uint32_t *)((uint32_t)paddr + 0x1000);
+  }
+}
+
 // カーネルメイン
 void kernel_main(void) {
   // BSS領域をゼロ初期化
@@ -863,11 +1063,17 @@ void kernel_main(void) {
   // 例外処理テスト
   WRITE_CSR(stvec, (uint32_t)kernel_entry);
 
+  // PLIC初期化
+  plic_init();
+
   // VIRTIO初期化
   virtio_blk_init();
 
   // GPU初期化 (プロービングのみ)
   virtio_gpu_init();
+
+  // Input初期化
+  virtio_input_init();
 
   // ファイルシステム初期化
   fs_init();

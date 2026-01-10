@@ -47,6 +47,28 @@
 #define VIRTIO_REG_QUEUE_NOTIFY 0x50
 #define VIRTIO_REG_DEVICE_STATUS 0x70
 #define VIRTIO_REG_DEVICE_CONFIG 0x100
+
+// PLIC (Platform-Level Interrupt Controller) 用
+#define PLIC_BASE 0x0c000000
+#define PLIC_PRIORITY(irq) (PLIC_BASE + (irq) * 4)
+#define PLIC_PENDING(irq) (PLIC_BASE + 0x1000 + ((irq) / 32) * 4)
+#define PLIC_MENABLE(hart, irq)                                                \
+  (PLIC_BASE + 0x2000 + (hart) * 0x80 + ((irq) / 32) * 4)
+#define PLIC_SENABLE(hart, irq)                                                \
+  (PLIC_BASE + 0x2080 + (hart) * 0x100 + ((irq) / 32) * 4)
+#define PLIC_MPRIORITY(hart) (PLIC_BASE + 0x200000 + (hart) * 0x2000)
+#define PLIC_SPRIORITY(hart) (PLIC_BASE + 0x201000 + (hart) * 0x2000)
+#define PLIC_MCLAIM(hart) (PLIC_BASE + 0x200004 + (hart) * 0x2000)
+#define PLIC_SCLAIM(hart) (PLIC_BASE + 0x201004 + (hart) * 0x2000)
+
+// Virtio MMIO 割り込み番号 (QEMU virt machine)
+#define VIRTIO_BLK_IRQ 1
+#define VIRTIO_GPU_IRQ 2
+#define VIRTIO_KEYBOARD_IRQ 3
+#define VIRTIO_MOUSE_IRQ 4
+
+#define SSTATUS_SIE (1 << 1) // Supervisor Interrupt Enable
+#define SIE_SEIE (1 << 9)    // Supervisor External Interrupt Enable
 #define VIRTIO_STATUS_ACK 1
 #define VIRTIO_STATUS_DRIVER 2
 #define VIRTIO_STATUS_DRIVER_OK 4
@@ -268,6 +290,13 @@ struct virtio_gpu_resource_flush {
   struct virtio_gpu_rect r;
   uint32_t resource_id;
   uint32_t padding;
+} __attribute__((packed));
+
+// VIRTIO-INPUT用
+struct virtio_input_event {
+  uint16_t type;
+  uint16_t code;
+  uint32_t value;
 } __attribute__((packed));
 
 struct virtio_gpu_resp_display_info {

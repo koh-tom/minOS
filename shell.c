@@ -8,7 +8,9 @@ void main(void) {
     int i = 0;
 
     for (;;) {
-      char ch = getchar();
+      int ch = getchar();
+      if (ch < 0) // 入力がない場合はリトライ
+        continue;
 
       // Enterキー
       if (ch == '\n' || ch == '\r') {
