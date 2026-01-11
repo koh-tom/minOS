@@ -199,6 +199,16 @@ long getchar(void) {
   return -1;
 }
 
+// マウスイベントのリングバッファ
+int mouse_x = 0;
+int mouse_y = 0;
+
+uint32_t screen_w = 640;
+uint32_t screen_h = 480;
+uint32_t *framebuffer;
+
+void draw_cursor(int prev_x, int prev_y, int new_x, int new_y);
+
 // トラップハンドラ
 void handle_trap(struct trap_frame *f) {
   uint32_t scause = READ_CSR(scause);
@@ -238,15 +248,53 @@ void handle_trap(struct trap_frame *f) {
       __sync_synchronize();
       virtio_reg_write32(keyboard_paddr, VIRTIO_REG_QUEUE_NOTIFY, 0);
     } else if (irq == VIRTIO_MOUSE_IRQ && mouse_vq) {
-      // マウス割り込みの処理 (同様にバッファを空けるだけ)
+      // マウス割り込みの処理
+      static int prev_mouse_x = 0;
+      static int prev_mouse_y = 0;
+      bool updated = false;
+
       while (mouse_vq->last_used_index != *mouse_vq->used_index) {
-        uint32_t desc_idx =
-            mouse_vq->used.ring[mouse_vq->last_used_index % VIRTQ_ENTRY_NUM].id;
+        struct virtq_used_elem *e =
+            &mouse_vq->used.ring[mouse_vq->last_used_index % VIRTQ_ENTRY_NUM];
+        uint32_t desc_idx = e->id;
+
+        struct virtio_input_event *event =
+            (struct virtio_input_event *)mouse_vq->descs[desc_idx].addr;
+
+        // Type 3 は EV_ABS (絶対座標)
+        if (event->type == 3) {
+          if (event->code == 0) { // ABS_X
+            mouse_x = ((uint64_t)event->value * screen_w) / 32768;
+            updated = true;
+          } else if (event->code == 1) { // ABS_Y
+            mouse_y = ((uint64_t)event->value * screen_h) / 32768;
+            updated = true;
+          }
+        }
+
+        // 画面外に出ないように制限
+        if (mouse_x < 0)
+          mouse_x = 0;
+        if (mouse_x >= screen_w)
+          mouse_x = screen_w - 1;
+        if (mouse_y < 0)
+          mouse_y = 0;
+        if (mouse_y >= screen_h)
+          mouse_y = screen_h - 1;
+
+        // バッファを再利用のためにAvailリングに戻す
         mouse_vq->avail.ring[mouse_vq->avail.index % VIRTQ_ENTRY_NUM] =
             desc_idx;
         mouse_vq->avail.index++;
         mouse_vq->last_used_index++;
       }
+
+      if (updated) {
+        draw_cursor(prev_mouse_x, prev_mouse_y, mouse_x, mouse_y);
+        prev_mouse_x = mouse_x;
+        prev_mouse_y = mouse_y;
+      }
+
       __sync_synchronize();
       virtio_reg_write32(mouse_paddr, VIRTIO_REG_QUEUE_NOTIFY, 0);
     }
@@ -722,9 +770,6 @@ void virtio_blk_init(void) {
 uint32_t virtio_gpu_paddr = 0;
 struct virtio_virtq *gpu_control_vq;
 struct virtio_gpu_config *gpu_config;
-uint32_t screen_w = 640;
-uint32_t screen_h = 480;
-uint32_t *framebuffer;
 
 // GPUにリクエストを送信し、応答を待つ
 void virtio_gpu_send_req(void *req, int len) {
@@ -897,6 +942,48 @@ void virtio_gpu_init(void) {
   virtio_gpu_send_req(&flush, sizeof(flush));
 
   printf("GPU Initialized. Screen cleared to Blue.\n");
+}
+
+void draw_rect(int x, int y, int w, int h, uint32_t color) {
+  for (int dy = 0; dy < h; dy++) {
+    for (int dx = 0; dx < w; dx++) {
+      if (x + dx < (int)screen_w && y + dy < (int)screen_h) {
+        framebuffer[(y + dy) * screen_w + (x + dx)] = color;
+      }
+    }
+  }
+}
+
+void virtio_gpu_flush(void) {
+  struct virtio_gpu_transfer_to_host_2d transfer = {0};
+  transfer.hdr.type = VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D;
+  transfer.r.x = 0;
+  transfer.r.y = 0;
+  transfer.r.width = screen_w;
+  transfer.r.height = screen_h;
+  transfer.offset = 0;
+  transfer.resource_id = 1;
+  virtio_gpu_send_req(&transfer, sizeof(transfer));
+
+  struct virtio_gpu_resource_flush flush = {0};
+  flush.hdr.type = VIRTIO_GPU_CMD_RESOURCE_FLUSH;
+  flush.r.x = 0;
+  flush.r.y = 0;
+  flush.r.width = screen_w;
+  flush.r.height = screen_h;
+  flush.resource_id = 1;
+  virtio_gpu_send_req(&flush, sizeof(flush));
+}
+
+void draw_cursor(int prev_x, int prev_y, int new_x, int new_y) {
+  // 古いカーソルを消す（青で塗りつぶす）
+  draw_rect(prev_x, prev_y, 10, 10, 0xFF0000FF);
+
+  // 新しいカーソルを描く（白）
+  draw_rect(new_x, new_y, 10, 10, 0xFFFFFFFF);
+
+  // 画面更新
+  virtio_gpu_flush();
 }
 
 // 8進数文字列を整数に変換
