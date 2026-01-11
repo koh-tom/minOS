@@ -112,7 +112,11 @@ void virtio_input_init(void);
 #define SCAUSE_EXTERNAL_INTERRUPT (SCAUSE_INTERRUPT | 9)
 
 // 1文字出力用関数
-void putchar(char ch) { sbi_call(ch, 0, 0, 0, 0, 0, 0, 1); }
+void console_putchar(char c);
+void putchar(char ch) {
+  sbi_call(ch, 0, 0, 0, 0, 0, 0, 1);
+  console_putchar(ch);
+}
 
 // PLICの初期化
 void plic_init(void) {
@@ -820,6 +824,50 @@ void draw_char(char c, int x, int y, uint32_t color) {
   }
 }
 
+// カーソル位置
+int cursor_x = 0;
+int cursor_y = 0;
+
+void draw_rect(int x, int y, int w, int h, uint32_t color);
+void virtio_gpu_flush(void);
+void virtio_gpu_flush_smart(int x, int y, int w, int h);
+
+void console_putchar(char c) {
+  if (!virtio_gpu_paddr)
+    return; // GPUアドレスが0ならまだ初期化されていないと判断
+
+  if (c == '\n') {
+    cursor_x = 0;
+    cursor_y += 16;
+  } else if (c == '\b') {
+    if (cursor_x > 0) {
+      cursor_x--;
+      // 文字を消す（背景色で上書き）
+      draw_rect(cursor_x * 8, cursor_y, 8, 16, 0xFF0000FF);
+      virtio_gpu_flush_smart(cursor_x * 8, cursor_y, 8, 16);
+    }
+  } else {
+    draw_char(c, cursor_x * 8, cursor_y, 0xFFFFFFFF);
+    cursor_x++;
+    virtio_gpu_flush_smart((cursor_x - 1) * 8, cursor_y, 8, 16);
+  }
+
+  // 行末での折り返し
+  if (cursor_x * 8 >= (int)screen_w) {
+    cursor_x = 0;
+    cursor_y += 16;
+  }
+
+  // 画面端でのスクロール（簡易版：上に戻る）
+  if (cursor_y + 16 >= (int)screen_h) {
+    cursor_x = 0;
+    cursor_y = 0;
+    // 画面クリア
+    draw_rect(0, 0, screen_w, screen_h, 0xFF0000FF);
+    virtio_gpu_flush();
+  }
+}
+
 void draw_string(const char *s, int x, int y, uint32_t color) {
   int cx = x;
   int cy = y;
@@ -833,6 +881,9 @@ void draw_string(const char *s, int x, int y, uint32_t color) {
     }
     s++;
   }
+  // 文字列描画後に一括フラッシュしたい場合はここで呼ぶが、
+  // console_putcharがメインなので、draw_stringはあまり使わない想定
+  virtio_gpu_flush();
 }
 
 void virtio_gpu_init(void) {
@@ -954,36 +1005,39 @@ void draw_rect(int x, int y, int w, int h, uint32_t color) {
   }
 }
 
-void virtio_gpu_flush(void) {
+void virtio_gpu_flush_smart(int x, int y, int w, int h) {
   struct virtio_gpu_transfer_to_host_2d transfer = {0};
   transfer.hdr.type = VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D;
-  transfer.r.x = 0;
-  transfer.r.y = 0;
-  transfer.r.width = screen_w;
-  transfer.r.height = screen_h;
-  transfer.offset = 0;
+  transfer.r.x = x;
+  transfer.r.y = y;
+  transfer.r.width = w;
+  transfer.r.height = h;
+  transfer.offset = (y * screen_w + x) * 4;
   transfer.resource_id = 1;
   virtio_gpu_send_req(&transfer, sizeof(transfer));
 
   struct virtio_gpu_resource_flush flush = {0};
   flush.hdr.type = VIRTIO_GPU_CMD_RESOURCE_FLUSH;
-  flush.r.x = 0;
-  flush.r.y = 0;
-  flush.r.width = screen_w;
-  flush.r.height = screen_h;
+  flush.r.x = x;
+  flush.r.y = y;
+  flush.r.width = w;
+  flush.r.height = h;
   flush.resource_id = 1;
   virtio_gpu_send_req(&flush, sizeof(flush));
+}
+
+void virtio_gpu_flush(void) {
+  virtio_gpu_flush_smart(0, 0, screen_w, screen_h);
 }
 
 void draw_cursor(int prev_x, int prev_y, int new_x, int new_y) {
   // 古いカーソルを消す（青で塗りつぶす）
   draw_rect(prev_x, prev_y, 10, 10, 0xFF0000FF);
+  virtio_gpu_flush_smart(prev_x, prev_y, 10, 10);
 
   // 新しいカーソルを描く（白）
   draw_rect(new_x, new_y, 10, 10, 0xFFFFFFFF);
-
-  // 画面更新
-  virtio_gpu_flush();
+  virtio_gpu_flush_smart(new_x, new_y, 10, 10);
 }
 
 // 8進数文字列を整数に変換
