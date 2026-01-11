@@ -968,9 +968,9 @@ void virtio_gpu_init(void) {
     }
   }
 
-  // 文字描画テスト
-  draw_string("Hello Virtio-GPU World!", 50, 50, 0xFFFFFFFF); // White text
-  draw_string("minOS is running...", 50, 70, 0xFF00FF00);     // Green text
+  // // 文字描画テスト
+  // draw_string("Hello Virtio-GPU World!", 50, 50, 0xFFFFFFFF); // White text
+  // draw_string("minOS is running...", 50, 70, 0xFF00FF00);     // Green text
 
   // 4. 転送とフラッシュ
   struct virtio_gpu_transfer_to_host_2d transfer = {0};
