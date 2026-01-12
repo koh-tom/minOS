@@ -7,7 +7,10 @@ CFLAGS = -std=c11 -O2 -g3 -Wall -Wextra --target=riscv32-unknown-elf \
          -Icommon -Ikernel -Iuser
 
 # Sources
-KERNEL_SRCS = kernel/kernel.c kernel/font.c common/common.c
+KERNEL_SRCS = kernel/kernel.c kernel/font.c common/common.c \
+              kernel/alloc.c kernel/proc.c kernel/trap.c kernel/plic.c \
+              kernel/virtio.c kernel/virtio_blk.c kernel/virtio_gpu.c \
+              kernel/virtio_input.c kernel/fs.c kernel/console.c
 USER_SRCS = user/shell.c user/user.c common/common.c
 
 # Intermediate files

@@ -4,31 +4,23 @@
 #define PROCS_MAX 8
 #define PROCS_UNUSED 0
 #define PROCS_RUNNABLE 1
-
 #define PROC_EXITED 2
 
 #define SATP_SV32 (1u << 31)
-#define PAGE_V (1 << 0)       // 有効化ビット
-#define PAGE_R (1 << 1)       // 読み取り可能
-#define PAGE_W (1 << 2)       // 書き込み可能
-#define PAGE_X (1 << 3)       // 実行可能
-#define PAGE_U (1 << 4)       // ユーザーレベル
-#define SSTATUS_SPIE (1 << 5) // 動作モード切替(S->U)
-#define SSTATUS_SUM (1 << 18) // ユーザーレベルでメモリアクセスを許可
+#define PAGE_V (1 << 0)
+#define PAGE_R (1 << 1)
+#define PAGE_W (1 << 2)
+#define PAGE_X (1 << 3)
+#define PAGE_U (1 << 4)
+#define SSTATUS_SPIE (1 << 5)
+#define SSTATUS_SUM (1 << 18)
 
-// ユーザランドのベースアドレス
 #define USER_BASE 0x1000000
-
-// システムコール時の例外原因
 #define SCAUSE_ECALL 8
-
-// ファイルシステム用
 #define FILES_MAX 10
-
-// ディスクのサイスイメージの最大サイズ
 #define DISK_MAX_SIZE align_up(sizeof(struct file) * FILES_MAX, PAGE_SIZE)
 
-// VIRTIO用
+// VIRTIO
 #define SECTOR_SIZE 512
 #define VIRTQ_ENTRY_NUM 16
 #define VIRTIO_DEVICE_BLK 2
@@ -48,7 +40,7 @@
 #define VIRTIO_REG_DEVICE_STATUS 0x70
 #define VIRTIO_REG_DEVICE_CONFIG 0x100
 
-// PLIC (Platform-Level Interrupt Controller) 用
+// PLIC
 #define PLIC_BASE 0x0c000000
 #define PLIC_PRIORITY(irq) (PLIC_BASE + (irq) * 4)
 #define PLIC_PENDING(irq) (PLIC_BASE + 0x1000 + ((irq) / 32) * 4)
@@ -61,14 +53,16 @@
 #define PLIC_MCLAIM(hart) (PLIC_BASE + 0x200004 + (hart) * 0x2000)
 #define PLIC_SCLAIM(hart) (PLIC_BASE + 0x201004 + (hart) * 0x2000)
 
-// Virtio MMIO 割り込み番号 (QEMU virt machine)
+// 割り込み
 #define VIRTIO_BLK_IRQ 1
 #define VIRTIO_GPU_IRQ 2
 #define VIRTIO_KEYBOARD_IRQ 3
 #define VIRTIO_MOUSE_IRQ 4
 
-#define SSTATUS_SIE (1 << 1) // Supervisor Interrupt Enable
-#define SIE_SEIE (1 << 9)    // Supervisor External Interrupt Enable
+#define SCAUSE_INTERRUPT 0x80000000
+
+#define SSTATUS_SIE (1 << 1)
+#define SIE_SEIE (1 << 9)
 #define VIRTIO_STATUS_ACK 1
 #define VIRTIO_STATUS_DRIVER 2
 #define VIRTIO_STATUS_DRIVER_OK 4
@@ -78,6 +72,7 @@
 #define VIRTIO_BLK_T_IN 0
 #define VIRTIO_BLK_T_OUT 1
 
+// マクロ
 #define PANIC(fmt, ...)                                                        \
   do {                                                                         \
     printf("PANIC: %s:%d: " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__);      \
@@ -104,36 +99,9 @@ struct sbiret {
 };
 
 struct trap_frame {
-  uint32_t ra;
-  uint32_t gp;
-  uint32_t tp;
-  uint32_t t0;
-  uint32_t t1;
-  uint32_t t2;
-  uint32_t t3;
-  uint32_t t4;
-  uint32_t t5;
-  uint32_t t6;
-  uint32_t a0;
-  uint32_t a1;
-  uint32_t a2;
-  uint32_t a3;
-  uint32_t a4;
-  uint32_t a5;
-  uint32_t a6;
-  uint32_t a7;
-  uint32_t s0;
-  uint32_t s1;
-  uint32_t s2;
-  uint32_t s3;
-  uint32_t s4;
-  uint32_t s5;
-  uint32_t s6;
-  uint32_t s7;
-  uint32_t s8;
-  uint32_t s9;
-  uint32_t s10;
-  uint32_t s11;
+  uint32_t ra, gp, tp, t0, t1, t2, t3, t4, t5, t6;
+  uint32_t a0, a1, a2, a3, a4, a5, a6, a7;
+  uint32_t s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11;
   uint32_t sp;
 } __attribute__((packed));
 
@@ -180,19 +148,14 @@ struct virtio_virtq {
 } __attribute__((packed));
 
 struct virtio_blk_req {
-  // ディスクリプタ1:デバイスから読み込み専用
   uint32_t type;
   uint32_t reserved;
   uint64_t sector;
-
-  // ディスクリプタ2:読み込みの場合書き込み可
   uint8_t data[512];
-
-  // ディスクリプタ3:書き込み可
   uint8_t status;
 } __attribute__((packed));
 
-// VIRTIO-GPU用
+// VIRTIO-GPU
 #define VIRTIO_GPU_EVENT_DISPLAY (1 << 0)
 
 struct virtio_gpu_config {
@@ -214,12 +177,7 @@ enum virtio_gpu_ctrl_type {
   VIRTIO_GPU_CMD_GET_CAPSET_INFO,
   VIRTIO_GPU_CMD_GET_CAPSET,
   VIRTIO_GPU_CMD_GET_EDID,
-
   VIRTIO_GPU_RESP_OK_NODATA = 0x1100,
-  VIRTIO_GPU_RESP_OK_DISPLAY_INFO,
-  VIRTIO_GPU_RESP_OK_CAPSET_INFO,
-  VIRTIO_GPU_RESP_OK_CAPSET,
-  VIRTIO_GPU_RESP_OK_EDID,
 };
 
 #define VIRTIO_GPU_FLAG_FENCE (1 << 0)
@@ -233,21 +191,11 @@ struct virtio_gpu_ctrl_hdr {
 } __attribute__((packed));
 
 struct virtio_gpu_rect {
-  uint32_t x;
-  uint32_t y;
-  uint32_t width;
-  uint32_t height;
+  uint32_t x, y, width, height;
 } __attribute__((packed));
 
 enum virtio_gpu_formats {
   VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM = 1,
-  VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM = 2,
-  VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM = 3,
-  VIRTIO_GPU_FORMAT_X8R8G8B8_UNORM = 4,
-  VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM = 67,
-  VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM = 68,
-  VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM = 69,
-  VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM = 134,
 };
 
 struct virtio_gpu_resource_create_2d {
@@ -292,23 +240,12 @@ struct virtio_gpu_resource_flush {
   uint32_t padding;
 } __attribute__((packed));
 
-// VIRTIO-INPUT用
 struct virtio_input_event {
   uint16_t type;
   uint16_t code;
   uint32_t value;
 } __attribute__((packed));
 
-struct virtio_gpu_resp_display_info {
-  struct virtio_gpu_ctrl_hdr hdr;
-  struct virtio_gpu_display_one {
-    struct virtio_gpu_rect r;
-    uint32_t enabled;
-    uint32_t flags;
-  } pmodes[16];
-} __attribute__((packed));
-
-// tarファイルのヘッダ構造体
 struct tar_header {
   char name[100];
   char mode[8];
@@ -330,10 +267,87 @@ struct tar_header {
   char data[];
 } __attribute__((packed));
 
-// ファイル構造体
 struct file {
-  bool in_use;     // 使用しているか
-  char name[100];  // ファイル名
-  char data[1024]; // ファイルの中身
-  size_t size;     // ファイルサイズ
+  bool in_use;
+  char name[100];
+  char data[1024];
+  size_t size;
 };
+
+extern struct process procs[PROCS_MAX];
+extern struct process *current_proc;
+extern struct process *idle_proc;
+extern char __bss[], __bss_end[], __stack_top[];
+extern char __free_ram[], __free_ram_end[];
+extern char __kernel_base[];
+extern char _binary_shell_bin_start[], _binary_shell_bin_size[];
+extern struct file files[FILES_MAX];
+extern uint8_t disk[DISK_MAX_SIZE];
+extern uint32_t screen_w;
+extern uint32_t screen_h;
+extern uint32_t *framebuffer;
+extern int cursor_x;
+extern int cursor_y;
+extern int mouse_x;
+extern int mouse_y;
+
+// alloc.c
+paddr_t alloc_pages(uint32_t n);
+void map_page(uint32_t *table1, uint32_t vaddr, paddr_t paddr, uint32_t flags);
+
+// proc.c
+struct process *create_process(const void *image, size_t image_size);
+void yield(void);
+void switch_context(uint32_t *prev_sp, uint32_t *next_sp);
+void user_entry(void);
+
+// trap.c
+void handle_trap(struct trap_frame *f);
+void kernel_entry(void);
+struct sbiret sbi_call(long arg0, long arg1, long arg2, long arg3, long arg4,
+                       long arg5, long fid, long eid);
+
+// plic.c
+void plic_init(void);
+
+// virtio.c
+struct virtio_virtq *virtq_init(uint32_t base, unsigned index);
+uint32_t virtio_reg_read32(uint32_t base, unsigned offset);
+uint64_t virtio_reg_read64(uint32_t base, unsigned offset);
+void virtio_reg_write32(uint32_t base, unsigned offset, uint32_t value);
+void virtio_reg_fetch_and_or32(uint32_t base, unsigned offset, uint32_t value);
+void virtq_kick(struct virtio_virtq *virtq, int desc_index);
+bool virtq_is_busy(struct virtio_virtq *virtq);
+
+// virtio_blk.c
+void virtio_blk_init(void);
+void read_write_disk(void *buf, unsigned sector, int is_write);
+extern uint64_t blk_capacity;
+
+// virtio_gpu.c
+void virtio_gpu_init(void);
+void virtio_gpu_send_req(void *req, int len);
+void draw_rect(int x, int y, int w, int h, uint32_t color);
+void draw_char(char c, int x, int y, uint32_t color);
+void draw_string(const char *s, int x, int y, uint32_t color);
+void virtio_gpu_flush(void);
+void virtio_gpu_flush_smart(int x, int y, int w, int h);
+void draw_cursor(int prev_x, int prev_y, int new_x, int new_y);
+extern uint32_t virtio_gpu_paddr;
+
+// virtio_input.c
+void virtio_input_init(void);
+void handle_keyboard_interrupt(void);
+void handle_mouse_interrupt(void);
+long getchar(void);
+extern struct virtio_virtq *keyboard_vq;
+extern struct virtio_virtq *mouse_vq;
+
+// fs.c
+void fs_init(void);
+void fs_flush(void);
+struct file *fs_lookup(const char *filename);
+
+// console.c
+void console_putchar(char c);
+void putchar(char ch);
