@@ -91,6 +91,29 @@ void handle_syscall(struct trap_frame *f) {
     }
     break;
   }
+  case SYS_SBRK: {
+    int increment = f->a0;
+    uintptr_t old_brk = current_proc->brk;
+    uintptr_t new_brk = old_brk + increment;
+
+    if (increment == 0) {
+      f->a0 = old_brk;
+      break;
+    }
+
+    // 新しいページを割り当ててマッピング
+    uintptr_t start_page = align_up(old_brk, PAGE_SIZE);
+    uintptr_t end_page = align_up(new_brk, PAGE_SIZE);
+
+    for (uintptr_t addr = start_page; addr < end_page; addr += PAGE_SIZE) {
+      paddr_t page = alloc_pages(1);
+      map_page(current_proc->page_table, addr, page, PAGE_U | PAGE_R | PAGE_W);
+    }
+
+    current_proc->brk = new_brk;
+    f->a0 = old_brk;
+    break;
+  }
   default:
     PANIC("unexpected syscall a3=%x\n", f->a3);
   }

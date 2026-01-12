@@ -76,6 +76,9 @@ struct process *create_process(const void *image, size_t image_size) {
     }
   }
 
+  // ユーザーヒープの開始地点を設定（プログラム末尾のページ境界）
+  proc->brk = USER_BASE + align_up(image_size, PAGE_SIZE);
+
   proc->pid = i + 1;
   proc->state = PROCS_RUNNABLE;
   proc->sp = (uint32_t)sp;

@@ -57,6 +57,12 @@ void main(void) {
       ls();
     } else if (strcmp(cmdline, "ps") == 0) { // psコマンド
       ps();
+    } else if (strcmp(cmdline, "memtest") == 0) { // mallocテスト
+      void *p1 = malloc(100);
+      void *p2 = malloc(200);
+      printf("malloc: p1=%x, p2=%x\n", (int)p1, (int)p2);
+      free(p1);
+      free(p2);
     } else if (cmdline[0] != '\0') {
       printf("unknown command: %s\n", cmdline);
     }

@@ -8,3 +8,6 @@ int readfile(const char *filename, char *buf, int len);
 int writefile(const char *filename, const char *buf, int len);
 int ls(void);
 int ps(void);
+int sbrk(int incr);
+void *malloc(size_t size);
+void free(void *ptr);

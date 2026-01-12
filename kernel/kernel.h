@@ -113,6 +113,7 @@ struct process {
   vaddr_t sp;
   uint32_t *page_table;
   uint8_t stack[8192];
+  uintptr_t brk; // ユーザーヒープの末尾
 };
 
 struct virtq_desc {
