@@ -34,6 +34,7 @@ int writefile(const char *filename, const char *buf, int len) {
 }
 
 int ls(void) { return syscall(SYS_LS, 0, 0, 0); }
+int ps(void) { return syscall(SYS_PS, 0, 0, 0); }
 
 __attribute__((section(".text.start"))) __attribute__((naked)) void
 start(void) {
