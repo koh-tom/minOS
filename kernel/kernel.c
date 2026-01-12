@@ -27,6 +27,17 @@ void kernel_main(void) {
   printf("alloc_pages test: paddr0=%x\n", paddr0);
   printf("alloc_pages test: paddr1=%x\n", paddr1);
 
+  // ヒープ初期化
+  void heap_init(void);
+  heap_init();
+
+  // kmallocテスト
+  void *ptr1 = kmalloc(100);
+  void *ptr2 = kmalloc(200);
+  printf("kmalloc test: ptr1=%x, ptr2=%x\n", (uint32_t)ptr1, (uint32_t)ptr2);
+  kfree(ptr1);
+  kfree(ptr2);
+
   // 例外設定
   WRITE_CSR(stvec, (uint32_t)kernel_entry);
 

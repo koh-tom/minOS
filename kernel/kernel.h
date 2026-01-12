@@ -294,6 +294,8 @@ extern int mouse_y;
 // alloc.c
 paddr_t alloc_pages(uint32_t n);
 void map_page(uint32_t *table1, uint32_t vaddr, paddr_t paddr, uint32_t flags);
+void *kmalloc(size_t size);
+void kfree(void *ptr);
 
 // proc.c
 struct process *create_process(const void *image, size_t image_size);
