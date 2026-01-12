@@ -87,7 +87,7 @@ void handle_trap(struct trap_frame *f) {
   if (scause == SCAUSE_ECALL) {
     handle_syscall(f);
     user_pc += 4;
-  } else if (scause == (SCAUSE_INTERRUPT | 9)) {
+  } else if (scause == SCAUSE_EXTERNAL_INTERRUPT) {
     // S-mode External Interrupt
     uint32_t irq = virtio_reg_read32(PLIC_SCLAIM(0), 0);
 
@@ -100,6 +100,16 @@ void handle_trap(struct trap_frame *f) {
     if (irq) {
       virtio_reg_write32(PLIC_SCLAIM(0), 0, irq);
     }
+  } else if (scause == SCAUSE_TIMER_INTERRUPT) {
+    // タイマー割り込み: 次の割り込みをセットしてコンテキストスイッチ
+    sbi_call(0, 0, 0, 0, 0, 0, 0, 0); // タイマーリセット (OpenSBI依存)
+
+    // 次のタイマー設定 (10ms後)
+    uint64_t current_time;
+    __asm__ volatile("rdtime %0" : "=r"(current_time));
+    sbi_call(current_time + 100000, 0, 0, 0, 0, 0, 0, 0); // 100000tick後
+
+    yield();
   } else {
     PANIC("unexpected trap scause=%x, stval=%x, sepc=%x\n", scause, stval,
           user_pc);

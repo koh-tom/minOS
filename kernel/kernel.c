@@ -63,6 +63,15 @@ void kernel_main(void) {
 
   create_process(_binary_shell_bin_start, (size_t)_binary_shell_bin_size);
 
+  // タイマー設定 (初回)
+  // ここで初回のタイマー割り込みをセットする
+  uint64_t current_time;
+  __asm__ volatile("rdtime %0" : "=r"(current_time));
+  sbi_call(current_time + 100000, 0, 0, 0, 0, 0, 0, 0);
+
+  // タイマー割り込み有効化 (Supervisor Timer Interrupt Enable)
+  WRITE_CSR(sie, READ_CSR(sie) | (1 << 5));
+
   yield();
   PANIC("switched to idle process");
 
