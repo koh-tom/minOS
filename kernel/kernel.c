@@ -279,11 +279,11 @@ void handle_trap(struct trap_frame *f) {
         // 画面外に出ないように制限
         if (mouse_x < 0)
           mouse_x = 0;
-        if (mouse_x >= screen_w)
+        if (mouse_x >= (int)screen_w)
           mouse_x = screen_w - 1;
         if (mouse_y < 0)
           mouse_y = 0;
-        if (mouse_y >= screen_h)
+        if (mouse_y >= (int)screen_h)
           mouse_y = screen_h - 1;
 
         // バッファを再利用のためにAvailリングに戻す
@@ -629,7 +629,12 @@ void handle_syscall(struct trap_frame *f) {
   case SYS_LS: {
     for (int i = 0; i < FILES_MAX; i++) {
       if (files[i].in_use) {
-        printf("%s  ", files[i].name);
+        const char *name = files[i].name;
+        if (strcmp(name, ".") == 0)
+          continue; // . は表示しない
+        if (name[0] == '.' && name[1] == '/')
+          name += 2; // ./ は飛ばす
+        printf("%s  ", name);
       }
     }
     printf("\n");
@@ -815,7 +820,7 @@ void draw_char(char c, int x, int y, uint32_t color) {
     uint8_t row = font_bitmap[(uint8_t)c][dy];
     for (int dx = 0; dx < 8; dx++) {
       if ((row >> (7 - dx)) & 1) {
-        if (x + dx < screen_w && y + dy < screen_h) {
+        if (x + dx < (int)screen_w && y + dy < (int)screen_h) {
           // B8G8R8A8 format, little endian
           framebuffer[(y + dy) * screen_w + (x + dx)] = color;
         }
@@ -1054,8 +1059,11 @@ int oct2int(char *oct, int len) {
 
 // ファイルシステムの初期化
 void fs_init(void) {
-  for (unsigned sector = 0; sector < sizeof(disk) / SECTOR_SIZE; sector++)
+  for (unsigned sector = 0; sector < sizeof(disk) / SECTOR_SIZE; sector++) {
+    if (sector * SECTOR_SIZE >= blk_capacity)
+      break;
     read_write_disk(&disk[sector * SECTOR_SIZE], sector, false);
+  }
 
   unsigned off = 0;
   for (int i = 0; i < FILES_MAX; i++) {

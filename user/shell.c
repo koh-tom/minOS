@@ -32,7 +32,7 @@ void main(void) {
       }
 
       // バッファオーバーフロー防止
-      if (i >= sizeof(cmdline) - 1) {
+      if (i >= (int)sizeof(cmdline) - 1) {
         printf("\ncommand line too long\n");
         goto prompt;
       }
